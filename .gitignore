@@ -5,6 +5,8 @@ build-debug
 .externalToolBuilders/
 .pydevproject
 .settings/
+CMakeFiles/
+*build/
 ## General
 
 # Compiled Object files

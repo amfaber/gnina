@@ -1012,6 +1012,7 @@ Thank you!\n";
           "  \\__, |_| |_|_|_| |_|\\__,_|\n"
           "   __/ |                    \n"
           "  |___/                     \n"
+          "SOURCE MODIFIED\n"
           "\n" + version_string +
           "\ngnina is based on smina and AutoDock Vina.\nPlease cite appropriately.\n";
 
