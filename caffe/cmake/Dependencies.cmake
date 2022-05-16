@@ -1,5 +1,5 @@
 # These lists are later turned into target properties on main caffe library target
-set(Caffe_LINKER_LIBS "")
+set(Caffe_LINKER_LIBS "libboost_python38.so.1.79.0")
 set(Caffe_INCLUDE_DIRS "")
 set(Caffe_DEFINITIONS "")
 set(Caffe_COMPILE_OPTIONS "")

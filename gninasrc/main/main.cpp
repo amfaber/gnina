@@ -293,7 +293,7 @@ void do_search(model& m, const boost::optional<model>& ref,
     log
     << "Term values, before weighting:\n";
     log << std::setprecision(5);
-    log << "## " << boost::replace_all_copy(m.get_name(), " ", "_");
+    log << "## " << m.get_pose_num() << " " << boost::replace_all_copy(m.get_name(), " ", "_");
 
     VINA_FOR_IN(i, term_values)
     {
@@ -343,6 +343,7 @@ void do_search(model& m, const boost::optional<model>& ref,
     }
     rmsd /= newcoords.size();
     rmsd = sqrt(rmsd);
+    log << "## " << m.get_pose_num() << " " << boost::replace_all_copy(m.get_name(), " ", "_") << "\n";
     log << "Affinity: " << std::fixed << std::setprecision(5) << e << "  "
         << intramolecular_energy
         << " (kcal/mol)\nRMSD: " << rmsd << "\n";
@@ -1004,7 +1005,7 @@ Please report this error at https://github.com/gnina/gnina/issues\n"
 Thank you!\n";
 
   const std::string cite_message =
-      "              _             \n"
+          "              _             \n"
           "             (_)            \n"
           "   __ _ _ __  _ _ __   __ _ \n"
           "  / _` | '_ \\| | '_ \\ / _` |\n"
@@ -1012,7 +1013,7 @@ Thank you!\n";
           "  \\__, |_| |_|_|_| |_|\\__,_|\n"
           "   __/ |                    \n"
           "  |___/                     \n"
-          "SOURCE MODIFIED\n"
+          "SOURCE MODIFIED by Andreas Malthe Faber\n"
           "\n" + version_string +
           "\ngnina is based on smina and AutoDock Vina.\nPlease cite appropriately.\n";
 
@@ -1463,7 +1464,7 @@ Thank you!\n";
     for(unsigned i = 0; i < argc; i++) {
       log << " " << argv[i];
     }
-    log << "\n";
+    log << "\n---BEGIN DATA---\n";
 
     FlexInfo finfo(flex_res, flex_dist, flexdist_ligand, nflex, nflex_hard_limit, log);
     // dkoes - parse in receptor once

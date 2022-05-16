@@ -1,7 +1,9 @@
 Debug
 Release/
 build
+build2
 build-debug
+modified_build
 .externalToolBuilders/
 .pydevproject
 .settings/
