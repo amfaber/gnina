@@ -122,8 +122,8 @@ class izfile : public boost::iostreams::filtering_stream<boost::iostreams::input
 class ozfile : public boost::iostreams::filtering_stream<
     boost::iostreams::output> {
 
-    std::ofstream uncompressed_outfile;
   public:
+    std::ofstream uncompressed_outfile;
 
     ozfile() {
     }

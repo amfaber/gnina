@@ -884,7 +884,8 @@ struct global_state
 //in enough memory efficiency to avoid using a single one
 void threads_at_work(job_queue<worker_job> *wrkq,
     job_queue<writer_job> *writerq, global_state *gs,
-    MolGetter *mols, int *nligs, CNNScorer cnn_scorer) //copy cnn_scorer so it can maintain state
+    MolGetter *mols, int *nligs, CNNScorer cnn_scorer, //copy cnn_scorer so it can maintain state
+    std::atomic<size_t>* currently_working)
 {
   if(!gs->settings->no_gpu)
     initializeCUDA(gs->settings->device);
@@ -895,27 +896,20 @@ void threads_at_work(job_queue<worker_job> *wrkq,
   worker_job j;
   while (!wrkq->wait_and_pop(j))
   {
-    if (j.molid != -1){
-      __sync_fetch_and_add(nligs, 1);
+    (*currently_working)++;
+    __sync_fetch_and_add(nligs, 1);
+    main_procedure(*(j.m), *gs->prec, boost::optional<model>(),
+        *gs->settings,
+        false, // no_cache == false
+        gs->atomoutfile->is_open()
+            || gs->settings->include_atom_info, j.gd,
+        *gs->minparms, *gs->wt, *gs->log, *(j.results),
+        *gs->user_grid, cnn_scorer);
 
-      main_procedure(*(j.m), *gs->prec, boost::optional<model>(),
-          *gs->settings,
-          false, // no_cache == false
-          gs->atomoutfile->is_open()
-              || gs->settings->include_atom_info, j.gd,
-          *gs->minparms, *gs->wt, *gs->log, *(j.results),
-          *gs->user_grid, cnn_scorer);
-
-      writer_job k(j.molid, j.results);
-      writerq->push(k);
-      delete j.m;
-    }
-    else
-    {
-      writer_job k(-1, NULL);
-      // k.molid = -1;
-      writerq->push(k);
-    }
+    writer_job k(j.molid, j.results);
+    writerq->push(k);
+    delete j.m;
+    (*currently_working)--;
   }
 }
 
@@ -924,7 +918,7 @@ void write_out(std::vector<result_info> &results, ozfile &outfile,
     user_settings &settings, const weighted_terms &wt, ozfile &outflex,
     std::string &outfext, std::ofstream &atomoutfile)
     {
-      std::cout << "write_out called" << std::endl;
+
   if (outfile)
   {
     //write out molecular data
@@ -953,24 +947,22 @@ void thread_a_writing(job_queue<writer_job>* writerq,
     global_state* gs,
     ozfile* outfile, std::string* outext, ozfile* outflex,
     std::string* outfext,
-    int* nligs) {
-  // std::cout << "Writing thread started" << std::endl;
+    int* nligs,
+    std::atomic<size_t>* currently_working,
+    std::string* out_name) {
   try {
     int nwritten = 0;
     boost::unordered_map<int, std::vector<result_info>*> proc_out;
     writer_job j;
     while (!writerq->wait_and_pop(j))
     {
-      // std::cout << "molid is " << j.molid << std::endl;
+      (*currently_working)++;
+
       if (j.molid == -1){
-        outfile->flush();
-        std::cout << "Flushed" << std::endl;
+        proc_out.clear();
+        nwritten = 0;
+
       }
-      // else if (j.molid == -2){
-      //   outfile->seekp(0);
-      //   nwritten = 0;
-      //   std::cout << "Seeked to 0" << std::endl;
-      // }
       else if (j.molid == nwritten) {
         write_out(*j.results, *outfile, *outext, *gs->settings, *gs->wt,
             *outflex, *outfext, *gs->atomoutfile);
@@ -988,6 +980,7 @@ void thread_a_writing(job_queue<writer_job>* writerq,
       else {
         proc_out[j.molid] = j.results;
       }
+      (*currently_working)--;
     }
   } catch (file_error& e)
   {
@@ -1630,6 +1623,10 @@ Thank you!\n";
     std::string outext;
     if (out_name.length() > 0) {
       outext = outfile.open(out_name);
+      if(boost::filesystem::extension(out_name) == ".gz" && continuous_operation){
+        std::cerr << "\n\nError: Continuous operation not implemented for gzipped output file\n";
+        return 1;
+      }
     }
 
     ozfile outflex;
@@ -1664,6 +1661,7 @@ Thank you!\n";
     boost::thread_group worker_threads;
     boost::timer::cpu_timer time;
     CNNScorer cnn_scorer(cnnopts); //shared network
+    std::atomic<size_t> currently_working(0);
 
     if (!settings.local_only)
       nthreads = 1; //docking is multithreaded already, don't add additional parallelism other than pipeline
@@ -1671,12 +1669,12 @@ Thank you!\n";
     //launch worker threads to process ligands in the work queue
     for (int i = 0; i < nthreads; i++) {
       worker_threads.create_thread(boost::bind(threads_at_work, &wrkq,
-          &writerq, &gs, &mols, &nligs, cnn_scorer));
+          &writerq, &gs, &mols, &nligs, cnn_scorer, &currently_working));
     }
 
     //launch writer thread to write results wherever they go
     boost::thread writer_thread(thread_a_writing, &writerq, &gs, &outfile,
-        &outext, &outflex, &outfext, &nligs);
+        &outext, &outflex, &outfext, &nligs, &currently_working, &out_name);
     try {
       //loop over input ligands, adding them to the work queue
       bool running = true;
@@ -1734,18 +1732,22 @@ Thank you!\n";
               break;
           }
         }
-        // worker_job j(-1, NULL, NULL, grid_dims());
-        // j.molid = -1;
         // wrkq.push(j);
-        std::cout << wrkq.empty() << std::endl;
-        std::cout << writerq.empty() << std::endl;
-        
+        while(!wrkq.jobs.empty() || currently_working){
+          sleep(0.05);
+        }
+        outfile.flush();
+        std::cout << "\n--Chunk finished--\n" << std::endl;
+
         if (continuous_operation){
           std::cin >> co_input;
           if(co_input == "quit" || co_input == "q" || co_input == "exit")
             break;
-          // writer_job j(-2, NULL);
-          // writerq.push(j);
+          
+          boost::filesystem::resize_file(out_name, 0);
+          outfile.uncompressed_outfile.seekp(0);
+          writer_job j(-1, NULL);
+          writerq.push(j);
         }
         else
           break;
