@@ -895,19 +895,27 @@ void threads_at_work(job_queue<worker_job> *wrkq,
   worker_job j;
   while (!wrkq->wait_and_pop(j))
   {
-    __sync_fetch_and_add(nligs, 1);
+    if (j.molid != -1){
+      __sync_fetch_and_add(nligs, 1);
 
-    main_procedure(*(j.m), *gs->prec, boost::optional<model>(),
-        *gs->settings,
-        false, // no_cache == false
-        gs->atomoutfile->is_open()
-            || gs->settings->include_atom_info, j.gd,
-        *gs->minparms, *gs->wt, *gs->log, *(j.results),
-        *gs->user_grid, cnn_scorer);
+      main_procedure(*(j.m), *gs->prec, boost::optional<model>(),
+          *gs->settings,
+          false, // no_cache == false
+          gs->atomoutfile->is_open()
+              || gs->settings->include_atom_info, j.gd,
+          *gs->minparms, *gs->wt, *gs->log, *(j.results),
+          *gs->user_grid, cnn_scorer);
 
-    writer_job k(j.molid, j.results);
-    writerq->push(k);
-    delete j.m;
+      writer_job k(j.molid, j.results);
+      writerq->push(k);
+      delete j.m;
+    }
+    else
+    {
+      writer_job k(-1, NULL);
+      // k.molid = -1;
+      writerq->push(k);
+    }
   }
 }
 
@@ -916,6 +924,7 @@ void write_out(std::vector<result_info> &results, ozfile &outfile,
     user_settings &settings, const weighted_terms &wt, ozfile &outflex,
     std::string &outfext, std::ofstream &atomoutfile)
     {
+      std::cout << "write_out called" << std::endl;
   if (outfile)
   {
     //write out molecular data
@@ -945,13 +954,24 @@ void thread_a_writing(job_queue<writer_job>* writerq,
     ozfile* outfile, std::string* outext, ozfile* outflex,
     std::string* outfext,
     int* nligs) {
+  // std::cout << "Writing thread started" << std::endl;
   try {
     int nwritten = 0;
     boost::unordered_map<int, std::vector<result_info>*> proc_out;
     writer_job j;
     while (!writerq->wait_and_pop(j))
     {
-      if (j.molid == nwritten) {
+      // std::cout << "molid is " << j.molid << std::endl;
+      if (j.molid == -1){
+        outfile->flush();
+        std::cout << "Flushed" << std::endl;
+      }
+      // else if (j.molid == -2){
+      //   outfile->seekp(0);
+      //   nwritten = 0;
+      //   std::cout << "Seeked to 0" << std::endl;
+      // }
+      else if (j.molid == nwritten) {
         write_out(*j.results, *outfile, *outext, *gs->settings, *gs->wt,
             *outflex, *outfext, *gs->atomoutfile);
         nwritten++;
@@ -1059,6 +1079,8 @@ Thank you!\n";
     bool add_hydrogens = true;
     bool strip_hydrogens = false;
     bool no_lig = false;
+    bool continuous_operation = false;
+    std::string co_input;
 
     user_settings settings;
     cnn_options& cnnopts = settings.cnnopts;
@@ -1086,7 +1108,11 @@ Thank you!\n";
     ("flex_limit", value<int>(&flex_limit),
         "Hard limit for the number of flexible residues")
     ("flex_max", value<int>(&flex_max),
-        "Retain at at most the closest flex_max flexible residues");
+        "Retain at at most the closest flex_max flexible residues")
+    ("continuous_operation", bool_switch(&continuous_operation)->default_value(false),
+        "Continuously run gnina on the same supplied inputs every time a stdin input is received.\
+ Send 'quit' to exit. It is expected that the input file is changed between each input to stdin\
+ otherwise this option is useless.");
 
     //options_description search_area("Search area (required, except with --score_only)");
     options_description search_area("Search space (required)");
@@ -1651,61 +1677,78 @@ Thank you!\n";
     //launch writer thread to write results wherever they go
     boost::thread writer_thread(thread_a_writing, &writerq, &gs, &outfile,
         &outext, &outflex, &outfext, &nligs);
-
     try {
       //loop over input ligands, adding them to the work queue
-      for (unsigned l = 0, nl = ligand_names.size(); l < nl; l++) {
-        doing(settings.verbosity, "Reading input", log);
-        const std::string ligand_name = ligand_names[l];
-        mols.setInputFile(ligand_name);
+      bool running = true;
+      while(running){
+        for (unsigned l = 0, nl = ligand_names.size(); l < nl; l++) {
+          doing(settings.verbosity, "Reading input", log);
+          const std::string ligand_name = ligand_names[l];
+          mols.setInputFile(ligand_name);
 
-        unsigned i = 0;
+          unsigned i = 0;
 
-        for (;;)  {
-          model* m = new model;
+          for (;;)  {
+            model* m = new model;
 
-          if (!mols.readMoleculeIntoModel(*m))  {
-            delete m;
-            break;
-          }
-          m->set_pose_num(i);
-          m->gdata.device_on = settings.gpu_docking;
-          m->gdata.device_id = settings.device;
-
-          grid_dims gdbox(gd);
-          if (settings.local_only)
-          {
-            gdbox = m->movable_atoms_box(autobox_add, box_granularity);
-            bool skip = false;
-            for(unsigned pos = 0; pos < 3; pos++) {
-              if(gdbox.elems[pos].n*box_granularity > 100) {
-                //we will run out of memory if the grid is too large
-                log << "WARNING: Ligand " << i << " in " << ligand_name << " has an extent greater than 100A. Skipping.\n";
-                skip = true;
-                break;
-              }
+            if (!mols.readMoleculeIntoModel(*m))  {
+              delete m;
+              break;
             }
-            if(skip)
-              continue;
-          } else if(autobox_extend) {
-            //make sure every dimension is large enough for the ligand to fit
-            fl maxdim = m->max_span(0);
-            setup_grid_dims(center_x, center_y, center_z,
-                size_x > maxdim ? size_x : maxdim,
-                size_y > maxdim ? size_y : maxdim,
-                size_z > maxdim ? size_z : maxdim, gdbox);
+            m->set_pose_num(i);
+            m->gdata.device_on = settings.gpu_docking;
+            m->gdata.device_id = settings.device;
+
+            grid_dims gdbox(gd);
+            if (settings.local_only)
+            {
+              gdbox = m->movable_atoms_box(autobox_add, box_granularity);
+              bool skip = false;
+              for(unsigned pos = 0; pos < 3; pos++) {
+                if(gdbox.elems[pos].n*box_granularity > 100) {
+                  //we will run out of memory if the grid is too large
+                  log << "WARNING: Ligand " << i << " in " << ligand_name << " has an extent greater than 100A. Skipping.\n";
+                  skip = true;
+                  break;
+                }
+              }
+              if(skip)
+                continue;
+            } else if(autobox_extend) {
+              //make sure every dimension is large enough for the ligand to fit
+              fl maxdim = m->max_span(0);
+              setup_grid_dims(center_x, center_y, center_z,
+                  size_x > maxdim ? size_x : maxdim,
+                  size_y > maxdim ? size_y : maxdim,
+                  size_z > maxdim ? size_z : maxdim, gdbox);
+            }
+
+            done(settings.verbosity, log);
+            std::vector<result_info>* results =
+                new std::vector<result_info>();
+            worker_job j(i, m, results, gdbox);
+            wrkq.push(j);
+
+            i++;
+            if (no_lig)
+              break;
           }
-
-          done(settings.verbosity, log);
-          std::vector<result_info>* results =
-              new std::vector<result_info>();
-          worker_job j(i, m, results, gdbox);
-          wrkq.push(j);
-
-          i++;
-          if (no_lig)
-            break;
         }
+        // worker_job j(-1, NULL, NULL, grid_dims());
+        // j.molid = -1;
+        // wrkq.push(j);
+        std::cout << wrkq.empty() << std::endl;
+        std::cout << writerq.empty() << std::endl;
+        
+        if (continuous_operation){
+          std::cin >> co_input;
+          if(co_input == "quit" || co_input == "q" || co_input == "exit")
+            break;
+          // writer_job j(-2, NULL);
+          // writerq.push(j);
+        }
+        else
+          break;
       }
     } catch (...)
     {
