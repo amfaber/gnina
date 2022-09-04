@@ -62,6 +62,7 @@
 
 #include <cuda_profiler_api.h>
 
+
 using namespace boost::iostreams;
 using boost::filesystem::path;
 
@@ -909,7 +910,6 @@ void threads_at_work(job_queue<worker_job> *wrkq,
     writer_job k(j.molid, j.results);
     writerq->push(k);
     delete j.m;
-    (*currently_working)--;
   }
 }
 
@@ -956,9 +956,7 @@ void thread_a_writing(job_queue<writer_job>* writerq,
     writer_job j;
     while (!writerq->wait_and_pop(j))
     {
-      (*currently_working)++;
-
-      if (j.molid == -1){
+        if (j.molid == -1){
         proc_out.clear();
         nwritten = 0;
 
@@ -967,6 +965,7 @@ void thread_a_writing(job_queue<writer_job>* writerq,
         write_out(*j.results, *outfile, *outext, *gs->settings, *gs->wt,
             *outflex, *outfext, *gs->atomoutfile);
         nwritten++;
+        (*currently_working)--;
         delete j.results;
         for (boost::unordered_map<int, std::vector<result_info>*>::iterator i;
             (i = proc_out.find(nwritten)) != proc_out.end();)
@@ -974,13 +973,13 @@ void thread_a_writing(job_queue<writer_job>* writerq,
           write_out(*i->second, *outfile, *outext, *gs->settings,
               *gs->wt, *outflex, *outfext, *gs->atomoutfile);
           nwritten++;
+          (*currently_working)--;
           delete i->second;
         }
       }
       else {
         proc_out[j.molid] = j.results;
       }
-      (*currently_working)--;
     }
   } catch (file_error& e)
   {
@@ -1734,10 +1733,15 @@ Thank you!\n";
         }
         // wrkq.push(j);
         while(!wrkq.jobs.empty() || currently_working){
-          sleep(0.05);
+          // std::cout << "currently_working " << currently_working << std::endl;
+          boost::this_thread::sleep(boost::posix_time::milliseconds(10));
         }
+        // boost::this_thread::sleep(boost::posix_time::milliseconds(1000));
+        // std::cout << "wrkq not empty status" << !wrkq.jobs.empty() << std::endl;
+        // std::cout << "currently_working at end" << currently_working << std::endl;
         outfile.flush();
-        std::cout << "\n--Chunk finished--\n" << std::endl;
+        outfile.uncompressed_outfile.flush();
+        std::cout << "\n--Chunk finished--\n" << std::endl; //Used to communicate that the chunk is finished. Should be handled by caller.
 
         if (continuous_operation){
           std::cin >> co_input;
