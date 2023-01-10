@@ -48,3 +48,5 @@ if(GFLAGS_FOUND)
     mark_as_advanced(GFLAGS_LIBRARY_DEBUG GFLAGS_LIBRARY_RELEASE
                      GFLAGS_LIBRARY GFLAGS_INCLUDE_DIR GFLAGS_ROOT_DIR)
 endif()
+message(STATUS "gflag_loc = ${GFLAGS_INCLUDE_DIR}")
+message(STATUS "gflag_loc = ${GFLAGS_LIBRARY}")
